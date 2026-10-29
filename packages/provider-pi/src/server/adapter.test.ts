@@ -1603,6 +1603,102 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("maps todo tool snapshots to one todo plan per turn", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      const takeTodo = (toolCallId: string, details: unknown) =>
+        fake
+          .emit({
+            type: "tool_execution_end",
+            toolCallId,
+            toolName: "todo",
+            result: { content: [{ type: "text", text: "ok" }], details },
+          })
+          .pipe(
+            Effect.andThen(
+              Effect.all([
+                takeEvent((event) => event.type === "plan.updated"),
+                takeEvent(
+                  (event) =>
+                    event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
+                ),
+              ]),
+            ),
+          );
+
+      // Gentle Shell's snapshot; dropped tasks are not outstanding work.
+      const [firstPlan, firstItem] = yield* takeTodo("todo-1", {
+        gentleTodo: {
+          tasks: [
+            { id: 1, title: "Explore", status: "done" },
+            { id: 2, title: "Build", status: "in_progress" },
+            { id: 3, title: "Skip", status: "dropped" },
+            { id: 4, title: "Wait", status: "blocked", note: "CI" },
+          ],
+          nextId: 5,
+        },
+      });
+      if (firstPlan.type !== "plan.updated" || firstPlan.plan.kind !== "todo_list")
+        return yield* Effect.die("Expected a todo plan");
+      if (firstItem.type !== "turn_item.updated" || firstItem.turnItem.type !== "todo_list")
+        return yield* Effect.die("Expected a todo item");
+      const steps = [
+        { id: "1", text: "Explore", status: "completed" },
+        { id: "2", text: "Build", status: "running" },
+        { id: "4", text: "Wait", status: "pending" },
+      ] as const;
+      assert.deepStrictEqual(firstPlan.plan.steps, steps);
+      assert.equal(firstPlan.plan.status, "active");
+      assert.deepStrictEqual(firstItem.turnItem.steps, steps);
+      assert.equal(firstItem.turnItem.planId, firstPlan.plan.id);
+      assert.equal(firstItem.turnItem.status, "completed");
+
+      // The rpiv-todo shape; a later write in the turn updates the same plan.
+      const [secondPlan, secondItem] = yield* takeTodo("todo-2", {
+        tasks: [
+          { id: 1, subject: "Explore", status: "completed" },
+          { id: 2, subject: "Gone", status: "deleted" },
+        ],
+      });
+      if (secondPlan.type !== "plan.updated" || secondPlan.plan.kind !== "todo_list")
+        return yield* Effect.die("Expected a todo plan");
+      if (secondItem.type !== "turn_item.updated" || secondItem.turnItem.type !== "todo_list")
+        return yield* Effect.die("Expected a todo item");
+      assert.equal(secondPlan.plan.id, firstPlan.plan.id);
+      assert.equal(secondPlan.plan.status, "completed");
+      assert.deepStrictEqual(secondPlan.plan.steps, [
+        { id: "1", text: "Explore", status: "completed" },
+      ]);
+      assert.notEqual(secondItem.turnItem.id, firstItem.turnItem.id);
+
+      // A failed or unrecognized todo result stays an ordinary tool row.
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "todo-3",
+        toolName: "todo",
+        result: { content: [{ type: "text", text: "bad status" }], details: { error: "x" } },
+        isError: true,
+      });
+      const fallback = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          (event.turnItem.type === "todo_list" || event.turnItem.type === "dynamic_tool"),
+      );
+      assert.isTrue(
+        fallback.type === "turn_item.updated" && fallback.turnItem.type === "dynamic_tool",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("injects the T3 MCP extension and bearer when a session exists", () =>
     Effect.gen(function* () {
       yield* (yield* McpProviderSessions.McpProviderSessions).set({

@@ -21,6 +21,7 @@ import {
   type ProviderApprovalDecision,
   type ProviderInstanceId,
   type OrchestrationV2ProviderTurnTokenUsage,
+  type PlanId,
 } from "@t3tools/contracts";
 import { PiSettings } from "../settings.ts";
 import * as Cause from "effect/Cause";
@@ -72,6 +73,7 @@ import {
 } from "./mcpInjection.ts";
 import { PI_FILE_CHANGE_TOOLS } from "./mcpExtensionSource.ts";
 import { applyPiExtensionStatus } from "./extensionStatus.ts";
+import { piTodoSteps } from "./todoSnapshot.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 const PI_DRIVER_KIND = PI_PROVIDER;
@@ -360,6 +362,8 @@ interface ActivePiTurn {
   readonly promptMayBeCommandOnly: boolean;
   latestCompactionAfterTokens: number | null;
   lastLiveUsedTokens: number | null;
+  /** Every todo write in a turn updates one plan. */
+  todoPlanId?: PlanId;
   settleProbeGeneration: number;
   /** An extension may start compaction immediately after Pi emits agent_settled. */
   settleWhenIdle: boolean;
@@ -1030,6 +1034,44 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               input: recordString(args, "command") ?? "",
               ...(outputText.length > 0 ? { output: outputText } : {}),
               ...(exitCode === undefined ? {} : { exitCode }),
+            },
+          });
+          return;
+        }
+        const todoSteps =
+          toolName === "todo" && completed && !isError
+            ? piTodoSteps(recordField(resultRecord, "details"))
+            : undefined;
+        if (todoSteps !== undefined) {
+          turn.todoPlanId ??= yield* idAllocator.allocate.plan({
+            threadId: turn.turnInput.threadId,
+            runId: turn.turnInput.runId,
+            driver: PI_PROVIDER,
+          });
+          const allDone =
+            todoSteps.length > 0 && todoSteps.every((step) => step.status === "completed");
+          yield* emit({
+            type: "plan.updated",
+            driver: PI_PROVIDER,
+            plan: {
+              id: turn.todoPlanId,
+              threadId: turn.turnInput.threadId,
+              runId: turn.turnInput.runId,
+              nodeId: base.nodeId,
+              status: allDone ? "completed" : "active",
+              kind: "todo_list",
+              steps: todoSteps,
+            },
+          });
+          yield* emit({
+            type: "turn_item.updated",
+            driver: PI_PROVIDER,
+            turnItem: {
+              ...shared,
+              title: null,
+              type: "todo_list",
+              planId: turn.todoPlanId,
+              steps: todoSteps,
             },
           });
           return;
