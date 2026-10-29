@@ -23,6 +23,7 @@ import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadServersPanel } from "./ThreadServersPanel";
+import { ThreadExtensionStatusPanel } from "./ThreadExtensionStatusPanel";
 import { ThreadDetailsUsage, type ThreadDetailsUsageInput } from "./ThreadDetailsUsage";
 import { ThreadDetailsItemsMenuItems } from "./ThreadDetailsItemsMenu";
 import { resolveThreadDetailsVisibility, THREAD_DETAILS_ITEMS } from "./threadDetailsItems";
@@ -80,6 +81,7 @@ interface ThreadDetailsPanelProps extends Pick<
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
   usage: ThreadDetailsUsageInput;
+  extensionStatuses?: ComponentProps<typeof ThreadExtensionStatusPanel>["statuses"];
 }
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
@@ -232,6 +234,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                     ) : null}
                   </div>
                 </ThreadDetailsSection>
+              ) : null}
+
+              {visible.extensions ? (
+                <ThreadExtensionStatusPanel statuses={props.extensionStatuses} />
               ) : null}
 
               {density === "full" && !props.draftId && visible.servers ? (

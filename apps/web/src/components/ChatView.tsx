@@ -355,7 +355,6 @@ import { ChatRightPanel } from "./chat/ChatRightPanel";
 import { useDraftEnvironmentRouting } from "./chat/useDraftEnvironmentRouting";
 import { branchMismatchBannerItem } from "./chat/ThreadActivityBanners";
 import { ThreadNow } from "./chat/ThreadNow";
-import { extensionStatusNowItem } from "./chat/extensionStatusNowItem";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import { useDelayedStatus } from "../hooks/useDelayedStatus";
 import { useTimelineFollow } from "./chat/useTimelineFollow";
@@ -2993,17 +2992,10 @@ export default function ChatView(props: ChatViewProps) {
   };
   const onExpandTimelineImageStable = useStableCallback(onExpandTimelineImage);
   const shownThreadSyncPhase = activeEnvironmentUnavailable ? null : delayedThreadSyncPhase;
-  const extensionStatusNow = activeThread
-    ? extensionStatusNowItem({
-        threadId: activeThread.id,
-        statuses: activeProviderThread?.extensionStatuses,
-      })
-    : null;
   const hasThreadNow =
     childInputNow !== null ||
     backgroundWorkNow !== null ||
     goalNow !== null ||
-    extensionStatusNow !== null ||
     shownThreadSyncPhase !== null;
   const queuedRunCount = serverProjection ? getUserQueuedThreadRuns(serverProjection).length : 0;
   // The queue control is mounted for every server thread but joins the footer only while it shows
@@ -3047,7 +3039,6 @@ export default function ChatView(props: ChatViewProps) {
           work={backgroundWorkNow}
           syncPhase={shownThreadSyncPhase}
           goal={goalNow}
-          extensions={extensionStatusNow}
         />
         {threadStatusLine}
         {pendingGuestMessageCount > 0 && isServerThread && activeThread ? (
@@ -3797,6 +3788,7 @@ export default function ChatView(props: ChatViewProps) {
                 sources: serverConfig?.usageLimitSources ?? EMPTY_USAGE_LIMIT_SOURCES,
                 contextWindow: activeContextWindow,
               }}
+              extensionStatuses={activeProviderThread?.extensionStatuses}
             />
 
             <PullRequestThreadDialogHost
