@@ -71,6 +71,7 @@ import {
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
 import { PI_FILE_CHANGE_TOOLS } from "./mcpExtensionSource.ts";
+import { applyPiExtensionStatus } from "./extensionStatus.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 const PI_DRIVER_KIND = PI_PROVIDER;
@@ -550,6 +551,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       let appliedThinking: string | null = null;
       let appliedSessionName: string | null = null;
       const outOfTurnExtensionErrors: Array<PiRpcRecord> = [];
+      // Session-scoped: extensions set statuses at startup, before T3 owns a thread.
+      let extensionStatuses: NonNullable<OrchestrationV2ProviderThread["extensionStatuses"]> = [];
       let lastKnownLeaf: string | null = null;
       // Failed get_entries leaves an untrustworthy turn boundary; re-sync the cursor on next capture.
       let leafCursorStale = false;
@@ -1236,6 +1239,18 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               message,
             },
           });
+          return;
+        }
+        if (method === "setStatus") {
+          const next = applyPiExtensionStatus(
+            extensionStatuses,
+            recordString(event, "statusKey"),
+            recordString(event, "statusText"),
+          );
+          if (next === undefined) return;
+          extensionStatuses = next;
+          if (threadState !== null)
+            yield* updateProviderThread(threadState, { extensionStatuses: next });
           return;
         }
         if (
@@ -2203,6 +2218,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 providerSessionId: input.providerSessionId,
                 nativeThreadRef: providerRef(nativeId),
                 ...(needsNewSession ? { nativeConversationHeadRef: null, contextUsage: null } : {}),
+                ...(existing.extensionStatuses !== undefined || extensionStatuses.length > 0
+                  ? { extensionStatuses }
+                  : {}),
                 status: "idle",
                 updatedAt: createdAt,
               }
@@ -2224,6 +2242,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 handoffIds: [],
                 forkedFrom: null,
                 pendingBackgroundTasks: [],
+                ...(extensionStatuses.length > 0 ? { extensionStatuses } : {}),
                 createdAt,
                 updatedAt: createdAt,
               };

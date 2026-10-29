@@ -1547,6 +1547,62 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("publishes extension statuses on the provider thread", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const setStatus = (statusKey: string, statusText?: string) =>
+        fake.emit({
+          type: "extension_ui_request",
+          id: `ui-status-${statusKey}`,
+          method: "setStatus",
+          statusKey,
+          ...(statusText === undefined ? {} : { statusText }),
+        });
+      const nextStatuses = (
+        predicate: (statuses: ReadonlyArray<{ key: string; text: string }>) => boolean,
+      ) =>
+        takeEvent(
+          (event) =>
+            event.type === "provider_thread.updated" &&
+            predicate(event.providerThread.extensionStatuses ?? []),
+        ).pipe(
+          Effect.map((event) =>
+            event.type === "provider_thread.updated"
+              ? (event.providerThread.extensionStatuses ?? [])
+              : [],
+          ),
+        );
+
+      // Extensions paint statuses at session start, before T3 owns a thread.
+      yield* setStatus("yolo", "\u001b[31m💥 SUPER YOLO ON\u001b[0m");
+      yield* setStatus("jobs", "⧗ 1 job");
+      yield* setStatus("blank", "   ");
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      assert.deepStrictEqual(yield* nextStatuses((statuses) => statuses.length === 2), [
+        { key: "yolo", text: "💥 SUPER YOLO ON" },
+        { key: "jobs", text: "⧗ 1 job" },
+      ]);
+
+      yield* setStatus("jobs");
+      assert.deepStrictEqual(yield* nextStatuses((statuses) => statuses.length === 1), [
+        { key: "yolo", text: "💥 SUPER YOLO ON" },
+      ]);
+
+      // A repeated value publishes nothing, so the next update is the new key.
+      yield* setStatus("yolo", "💥 SUPER YOLO ON");
+      yield* setStatus("engram", "t3code · ready");
+      assert.deepStrictEqual(yield* nextStatuses(() => true), [
+        { key: "yolo", text: "💥 SUPER YOLO ON" },
+        { key: "engram", text: "t3code · ready" },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("injects the T3 MCP extension and bearer when a session exists", () =>
     Effect.gen(function* () {
       yield* (yield* McpProviderSessions.McpProviderSessions).set({
