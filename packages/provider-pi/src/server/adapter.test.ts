@@ -1699,6 +1699,93 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("tracks Gentle Agents tasks as subagents from run to pushed completion", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      const takeSubagent = () =>
+        takeEvent((event) => event.type === "subagent.updated").pipe(
+          Effect.flatMap((event) =>
+            event.type === "subagent.updated"
+              ? Effect.succeed(event.subagent)
+              : Effect.die("Expected a subagent"),
+          ),
+        );
+
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "run-1",
+        toolName: "subagent_run",
+        args: { agent: "worker", task: "Fix the parser", mode: "background" },
+        result: {
+          content: [{ type: "text", text: "Started worker" }],
+          details: {
+            gentleAgents: {
+              taskId: "task-1",
+              agent: "worker",
+              status: "running",
+              label: "fix parser",
+              lastStep: "reading src/parser.ts",
+            },
+          },
+        },
+      });
+      const running = yield* takeSubagent();
+      assert.equal(running.status, "running");
+      assert.equal(running.prompt, "Fix the parser");
+      assert.equal(running.title, "fix parser");
+      assert.equal(running.progress, "reading src/parser.ts");
+      assert.isNull(running.completedAt);
+
+      // Status checks for an unknown task carry no prompt, so they change nothing.
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "status-unknown",
+        toolName: "subagent_status",
+        args: { task_id: "task-9" },
+        result: {
+          content: [{ type: "text", text: "x" }],
+          details: { gentleAgents: { taskId: "task-9", agent: "worker", status: "running" } },
+        },
+      });
+      // Background completion arrives as a pushed custom message.
+      yield* fake.emit({
+        type: "message_end",
+        message: {
+          role: "custom",
+          customType: "gentle-agents.result",
+          content: "Parser fixed; tests pass.",
+          details: {
+            gentleAgents: { taskId: "task-1", agent: "worker", status: "completed" },
+          },
+        },
+      });
+      const completed = yield* takeSubagent();
+      assert.equal(completed.id, running.id);
+      assert.equal(completed.status, "completed");
+      assert.equal(completed.prompt, "Fix the parser");
+      assert.equal(completed.result, "Parser fixed; tests pass.");
+      assert.isNotNull(completed.completedAt);
+      const item = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "subagent",
+      );
+      assert.isTrue(
+        item.type === "turn_item.updated" &&
+          item.turnItem.type === "subagent" &&
+          item.turnItem.subagentId === running.id &&
+          item.turnItem.status === "completed",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("injects the T3 MCP extension and bearer when a session exists", () =>
     Effect.gen(function* () {
       yield* (yield* McpProviderSessions.McpProviderSessions).set({

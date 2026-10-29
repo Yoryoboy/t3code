@@ -74,6 +74,12 @@ import {
 import { PI_FILE_CHANGE_TOOLS } from "./mcpExtensionSource.ts";
 import { applyPiExtensionStatus } from "./extensionStatus.ts";
 import { piTodoSteps } from "./todoSnapshot.ts";
+import {
+  GENTLE_AGENTS_RESULT_TYPE,
+  GENTLE_AGENTS_TOOLS,
+  gentleAgentsTask,
+  type GentleAgentsTask,
+} from "./gentleAgentsTask.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 const PI_DRIVER_KIND = PI_PROVIDER;
@@ -557,6 +563,16 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       const outOfTurnExtensionErrors: Array<PiRpcRecord> = [];
       // Session-scoped: extensions set statuses at startup, before T3 owns a thread.
       let extensionStatuses: NonNullable<OrchestrationV2ProviderThread["extensionStatuses"]> = [];
+      // Background tasks outlive the turn that started them; their rows stay on that turn.
+      const gentleAgentsTasks = new Map<
+        string,
+        {
+          readonly turn: ActivePiTurn;
+          readonly parentNativeId: string;
+          readonly prompt: string;
+          readonly startedAt: DateTime.Utc;
+        }
+      >();
       let lastKnownLeaf: string | null = null;
       // Failed get_entries leaves an untrustworthy turn boundary; re-sync the cursor on next capture.
       let leafCursorStale = false;
@@ -1115,6 +1131,98 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         if (toolName === "subagent") {
           yield* emitSubagentTasks(turn, toolCallId, resultRecord, completed);
         }
+        const agentsTask = GENTLE_AGENTS_TOOLS.has(toolName)
+          ? gentleAgentsTask(recordField(resultRecord, "details"))
+          : undefined;
+        if (completed && agentsTask !== undefined) {
+          yield* emitGentleAgentsTask(
+            turn,
+            toolCallId,
+            agentsTask,
+            toolName === "subagent_run" ? recordString(args, "task") : undefined,
+            outputText,
+          );
+        }
+      });
+
+      const emitGentleAgentsTask = Effect.fnUntraced(function* (
+        turn: ActivePiTurn,
+        parentNativeId: string,
+        task: GentleAgentsTask,
+        prompt: string | undefined,
+        output: string,
+      ) {
+        const emittedAt = yield* DateTime.now;
+        let known = gentleAgentsTasks.get(task.taskId);
+        if (known === undefined) {
+          if (prompt === undefined) return;
+          known = { turn, parentNativeId, prompt, startedAt: emittedAt };
+          gentleAgentsTasks.set(task.taskId, known);
+        }
+        if (task.finished) gentleAgentsTasks.delete(task.taskId);
+        const origin = known.turn;
+        const nativeTaskId = `gentle-agents:${task.taskId}`;
+        const subagentId = idAllocator.derive.nodeFromProviderItem({
+          driver: PI_PROVIDER,
+          nativeItemId: nativeTaskId,
+        });
+        const progress =
+          !task.finished && task.lastStep !== undefined
+            ? { progress: task.lastStep.slice(0, 200) }
+            : {};
+        const resultText = task.finished
+          ? (output.trim() || task.error || "").slice(0, 10_000) || null
+          : null;
+        const completedAt = task.finished ? emittedAt : null;
+        const title = task.label ?? task.agent;
+        yield* emit({
+          type: "subagent.updated",
+          driver: PI_PROVIDER,
+          subagent: {
+            id: subagentId,
+            threadId: origin.turnInput.threadId,
+            runId: origin.turnInput.runId,
+            parentNodeId: idAllocator.derive.nodeFromProviderItem({
+              driver: PI_PROVIDER,
+              nativeItemId: known.parentNativeId,
+            }),
+            origin: "provider_native",
+            createdBy: "agent",
+            driver: PI_PROVIDER,
+            providerInstanceId: options.instanceId,
+            providerThreadId: origin.turnInput.providerThread.id,
+            childThreadId: null,
+            nativeTaskRef: providerRef(nativeTaskId),
+            prompt: known.prompt,
+            title,
+            model: null,
+            status: task.status,
+            ...progress,
+            result: resultText,
+            startedAt: known.startedAt,
+            completedAt,
+            updatedAt: emittedAt,
+          },
+        });
+        yield* emit({
+          type: "turn_item.updated",
+          driver: PI_PROVIDER,
+          turnItem: {
+            ...baseItemFields(origin, nativeTaskId, known.startedAt, emittedAt),
+            status: task.status,
+            title,
+            completedAt,
+            type: "subagent",
+            subagentId,
+            origin: "provider_native",
+            driver: PI_PROVIDER,
+            providerInstanceId: options.instanceId,
+            childThreadId: null,
+            prompt: known.prompt,
+            ...progress,
+            result: resultText,
+          },
+        });
       });
 
       const emitSubagentTasks = Effect.fnUntraced(function* (
@@ -1780,8 +1888,25 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             return;
           }
           case "message_end": {
-            if (turn === null) return;
             const message = event["message"];
+            const agentsTask =
+              recordString(message, "role") === "custom" &&
+              recordString(message, "customType") === GENTLE_AGENTS_RESULT_TYPE
+                ? gentleAgentsTask(recordField(message, "details"))
+                : undefined;
+            const knownAgentsTask =
+              agentsTask === undefined ? undefined : gentleAgentsTasks.get(agentsTask.taskId);
+            if (agentsTask !== undefined && knownAgentsTask !== undefined) {
+              yield* emitGentleAgentsTask(
+                knownAgentsTask.turn,
+                knownAgentsTask.parentNativeId,
+                agentsTask,
+                undefined,
+                contentText(recordField(message, "content")),
+              );
+              return;
+            }
+            if (turn === null) return;
             if (recordString(message, "role") !== "assistant") return;
             yield* completeOpenStreamItems(turn);
             if (recordString(message, "stopReason") === "error" && turn.failure === null) {
