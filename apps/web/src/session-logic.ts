@@ -273,6 +273,29 @@ function toLatestProposedPlanState(
   };
 }
 
+/** The thread's current task list: the todo plan its provider updated last, in any run. */
+export function findLatestTodoPlan(
+  projection: ThreadStructure | null,
+): Extract<OrchestrationV2PlanArtifact, { readonly kind: "todo_list" }> | null {
+  if (projection === null) return null;
+  let latest: { plan: OrchestrationV2PlanArtifact; time: string } | null = null;
+  for (const plan of projection.plans) {
+    if (plan.kind !== "todo_list") continue;
+    const time = planItemTime(projection, plan);
+    if (latest === null || time > latest.time) latest = { plan, time };
+  }
+  return latest?.plan.kind === "todo_list" ? latest.plan : null;
+}
+
+/** Pi's Gentle Agents tasks, which the details panel lists instead of the timeline. */
+export function findPiSubagents(projection: ThreadStructure | null) {
+  if (projection === null) return [];
+  return projection.turnItems.filter(
+    (item): item is Extract<typeof item, { readonly type: "subagent" }> =>
+      item.type === "subagent" && item.driver === "pi",
+  );
+}
+
 export function findLatestProposedPlan(
   projection: ThreadStructure | null,
   latestRunId: RunId | string | null | undefined,

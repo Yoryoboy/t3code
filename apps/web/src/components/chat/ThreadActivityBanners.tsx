@@ -130,6 +130,8 @@ export function backgroundWorkNowItem(input: {
       startedAtMs: item?.startedAt ? DateTime.toEpochMillis(item.startedAt) : null,
       updatedAtMs: subagent ? DateTime.toEpochMillis(subagent.updatedAt) : 0,
       childThreadId: task.childThreadId ?? subagent?.childThreadId ?? undefined,
+      // Pi cannot cancel one Gentle Agents task; the agent stops it when asked.
+      stoppable: subagent?.driver !== "pi",
     };
   });
   const [only] = rows.length === 1 ? rows : [];
@@ -175,9 +177,11 @@ export function backgroundWorkNowItem(input: {
             Open
           </InlineButton>
         )}
-        <InlineButton disabled={input.stopDisabled} onClick={() => void input.onStop()}>
-          {input.stopping ? "Stopping..." : "Stop"}
-        </InlineButton>
+        {rows.some((row) => row.stoppable) ? (
+          <InlineButton disabled={input.stopDisabled} onClick={() => void input.onStop()}>
+            {input.stopping ? "Stopping..." : "Stop"}
+          </InlineButton>
+        ) : null}
       </>
     ),
   };

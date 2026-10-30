@@ -1547,6 +1547,248 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("publishes extension statuses on the provider thread", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const setStatus = (statusKey: string, statusText?: string) =>
+        fake.emit({
+          type: "extension_ui_request",
+          id: `ui-status-${statusKey}`,
+          method: "setStatus",
+          statusKey,
+          ...(statusText === undefined ? {} : { statusText }),
+        });
+      const nextStatuses = (
+        predicate: (statuses: ReadonlyArray<{ key: string; text: string }>) => boolean,
+      ) =>
+        takeEvent(
+          (event) =>
+            event.type === "provider_thread.updated" &&
+            predicate(event.providerThread.extensionStatuses ?? []),
+        ).pipe(
+          Effect.map((event) =>
+            event.type === "provider_thread.updated"
+              ? (event.providerThread.extensionStatuses ?? [])
+              : [],
+          ),
+        );
+
+      // Extensions paint statuses at session start, before T3 owns a thread.
+      yield* setStatus("yolo", "\u001b[31m💥 SUPER YOLO ON\u001b[0m");
+      yield* setStatus("jobs", "⧗ 1 job");
+      yield* setStatus("blank", "   ");
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      assert.deepStrictEqual(yield* nextStatuses((statuses) => statuses.length === 2), [
+        { key: "yolo", text: "💥 SUPER YOLO ON" },
+        { key: "jobs", text: "⧗ 1 job" },
+      ]);
+
+      yield* setStatus("jobs");
+      assert.deepStrictEqual(yield* nextStatuses((statuses) => statuses.length === 1), [
+        { key: "yolo", text: "💥 SUPER YOLO ON" },
+      ]);
+
+      // Repeated values and oversized keys publish nothing, so the next update is the new key.
+      yield* setStatus("yolo", "💥 SUPER YOLO ON");
+      yield* setStatus(`${"k".repeat(64)}-a`, "first");
+      yield* setStatus(`${"k".repeat(64)}-b`, "second");
+      yield* setStatus("engram", "t3code · ready");
+      assert.deepStrictEqual(yield* nextStatuses(() => true), [
+        { key: "yolo", text: "💥 SUPER YOLO ON" },
+        { key: "engram", text: "t3code · ready" },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("maps todo tool snapshots to one todo plan per turn", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      const takeTodo = (toolCallId: string, details: unknown) =>
+        fake
+          .emit({
+            type: "tool_execution_end",
+            toolCallId,
+            toolName: "todo",
+            result: { content: [{ type: "text", text: "ok" }], details },
+          })
+          .pipe(
+            Effect.andThen(
+              Effect.all([
+                takeEvent((event) => event.type === "plan.updated"),
+                takeEvent(
+                  (event) =>
+                    event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
+                ),
+              ]),
+            ),
+          );
+
+      // Gentle Shell's snapshot; dropped tasks are not outstanding work.
+      const [firstPlan, firstItem] = yield* takeTodo("todo-1", {
+        gentleTodo: {
+          tasks: [
+            { id: 1, title: "Explore", status: "done" },
+            { id: 2, title: "Build", status: "in_progress" },
+            { id: 3, title: "Skip", status: "dropped" },
+            { id: 4, title: "Wait", status: "blocked", note: "CI" },
+          ],
+          nextId: 5,
+        },
+      });
+      if (firstPlan.type !== "plan.updated" || firstPlan.plan.kind !== "todo_list")
+        return yield* Effect.die("Expected a todo plan");
+      if (firstItem.type !== "turn_item.updated" || firstItem.turnItem.type !== "todo_list")
+        return yield* Effect.die("Expected a todo item");
+      const steps = [
+        { id: "1", text: "Explore", status: "completed" },
+        { id: "2", text: "Build", status: "running" },
+        { id: "4", text: "Wait", status: "pending" },
+      ] as const;
+      assert.deepStrictEqual(firstPlan.plan.steps, steps);
+      assert.equal(firstPlan.plan.status, "active");
+      assert.deepStrictEqual(firstItem.turnItem.steps, steps);
+      assert.equal(firstItem.turnItem.planId, firstPlan.plan.id);
+      assert.equal(firstItem.turnItem.status, "completed");
+
+      // The rpiv-todo shape; a later write in the turn updates the same plan.
+      const [secondPlan, secondItem] = yield* takeTodo("todo-2", {
+        tasks: [
+          { id: 1, subject: "Explore", status: "completed" },
+          { id: 2, subject: "Gone", status: "deleted" },
+        ],
+      });
+      if (secondPlan.type !== "plan.updated" || secondPlan.plan.kind !== "todo_list")
+        return yield* Effect.die("Expected a todo plan");
+      if (secondItem.type !== "turn_item.updated" || secondItem.turnItem.type !== "todo_list")
+        return yield* Effect.die("Expected a todo item");
+      assert.equal(secondPlan.plan.id, firstPlan.plan.id);
+      assert.equal(secondPlan.plan.status, "completed");
+      assert.deepStrictEqual(secondPlan.plan.steps, [
+        { id: "1", text: "Explore", status: "completed" },
+      ]);
+      assert.notEqual(secondItem.turnItem.id, firstItem.turnItem.id);
+
+      // A failed or unrecognized todo result stays an ordinary tool row.
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "todo-3",
+        toolName: "todo",
+        result: { content: [{ type: "text", text: "bad status" }], details: { error: "x" } },
+        isError: true,
+      });
+      const fallback = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          (event.turnItem.type === "todo_list" || event.turnItem.type === "dynamic_tool"),
+      );
+      assert.isTrue(
+        fallback.type === "turn_item.updated" && fallback.turnItem.type === "dynamic_tool",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("tracks Gentle Agents tasks as subagents from run to pushed completion", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      const takeSubagent = () =>
+        takeEvent((event) => event.type === "subagent.updated").pipe(
+          Effect.flatMap((event) =>
+            event.type === "subagent.updated"
+              ? Effect.succeed(event.subagent)
+              : Effect.die("Expected a subagent"),
+          ),
+        );
+
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "run-1",
+        toolName: "subagent_run",
+        args: { agent: "worker", task: "Fix the parser", mode: "background" },
+        result: {
+          content: [{ type: "text", text: "Started worker" }],
+          details: {
+            gentleAgents: {
+              taskId: "task-1",
+              agent: "worker",
+              status: "running",
+              label: "fix parser",
+              lastStep: "reading src/parser.ts",
+            },
+          },
+        },
+      });
+      const running = yield* takeSubagent();
+      assert.equal(running.status, "running");
+      assert.equal(running.prompt, "Fix the parser");
+      assert.equal(running.title, "fix parser");
+      assert.equal(running.progress, "reading src/parser.ts");
+      assert.isNull(running.completedAt);
+
+      // Status checks for an unknown task carry no prompt, so they change nothing.
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "status-unknown",
+        toolName: "subagent_status",
+        args: { task_id: "task-9" },
+        result: {
+          content: [{ type: "text", text: "x" }],
+          details: { gentleAgents: { taskId: "task-9", agent: "worker", status: "running" } },
+        },
+      });
+      // Background completion arrives as a pushed custom message.
+      yield* fake.emit({
+        type: "message_end",
+        message: {
+          role: "custom",
+          customType: "gentle-agents.result",
+          content: "Parser fixed; tests pass.",
+          details: {
+            gentleAgents: { taskId: "task-1", agent: "worker", status: "completed" },
+          },
+        },
+      });
+      const completed = yield* takeSubagent();
+      assert.equal(completed.id, running.id);
+      assert.equal(completed.status, "completed");
+      assert.equal(completed.prompt, "Fix the parser");
+      assert.equal(completed.result, "Parser fixed; tests pass.");
+      assert.isNotNull(completed.completedAt);
+      const item = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "subagent",
+      );
+      assert.isTrue(
+        item.type === "turn_item.updated" &&
+          item.turnItem.type === "subagent" &&
+          item.turnItem.subagentId === running.id &&
+          item.turnItem.status === "completed" &&
+          item.turnItem.agent === "worker",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("injects the T3 MCP extension and bearer when a session exists", () =>
     Effect.gen(function* () {
       yield* (yield* McpProviderSessions.McpProviderSessions).set({

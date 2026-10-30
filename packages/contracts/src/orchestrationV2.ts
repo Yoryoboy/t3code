@@ -1043,6 +1043,14 @@ export const OrchestrationV2ProviderGoal = Schema.Struct({
 });
 export type OrchestrationV2ProviderGoal = typeof OrchestrationV2ProviderGoal.Type;
 
+/** A status line an extension inside the provider paints, such as a Pi `setStatus` entry. */
+export const OrchestrationV2ProviderExtensionStatus = Schema.Struct({
+  key: TrimmedNonEmptyString,
+  text: TrimmedNonEmptyString,
+});
+export type OrchestrationV2ProviderExtensionStatus =
+  typeof OrchestrationV2ProviderExtensionStatus.Type;
+
 export const OrchestrationV2ProviderThread = Schema.Struct({
   id: ProviderThreadId,
   driver: ProviderDriverKind,
@@ -1075,6 +1083,7 @@ export const OrchestrationV2ProviderThread = Schema.Struct({
   goal: Schema.optional(Schema.NullOr(OrchestrationV2ProviderGoal)).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  extensionStatuses: Schema.optional(Schema.Array(OrchestrationV2ProviderExtensionStatus)),
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
 });
@@ -1760,6 +1769,8 @@ export const OrchestrationV2TurnItem = Schema.Union([
     providerInstanceId: ProviderInstanceId,
     childThreadId: Schema.NullOr(ThreadId),
     remoteChild: Schema.optional(OrchestrationV2RemoteTaskChild),
+    /** The provider's name for the kind of agent, such as a Gentle Agents `worker`. */
+    agent: Schema.optional(TrimmedNonEmptyString),
     prompt: Schema.String,
     progress: Schema.optional(Schema.String),
     result: Schema.NullOr(Schema.String),
@@ -2584,6 +2595,8 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     providerInstanceId: ProviderInstanceId,
     childThreadId: Schema.NullOr(ThreadId),
     remoteChild: Schema.optional(OrchestrationV2RemoteTaskChild),
+    /** The provider's name for the kind of agent, such as a Gentle Agents `worker`. */
+    agent: Schema.optional(TrimmedNonEmptyString),
     prompt: Schema.String,
     progress: Schema.optional(Schema.String),
     result: Schema.NullOr(Schema.String),

@@ -4049,6 +4049,7 @@ describe("live subagents after their parent turn settles", () => {
     prompt: `Inspect ${id}`,
     result: null,
   });
+  const PI_DRIVER = ProviderDriverKind.make("pi");
   const rowsFor = (children: ReadonlyArray<OrchestrationV2TurnItem>) =>
     deriveMessagesTimelineRows({
       timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
@@ -4116,6 +4117,11 @@ describe("live subagents after their parent turn settles", () => {
       ]);
     },
   );
+
+  it("leaves Pi subagents to the details panel", () => {
+    const pi = { ...child("pi-child", 3, "running", "provider_native"), driver: PI_DRIVER };
+    expect(rowsFor([pi]).map((row) => row.id)).toEqual(["user", `turn-fold:${runId}`, "assistant"]);
+  });
 
   it("keeps a launch batch visible while any member is still running", () => {
     const rows = rowsFor([child("done", 3, "completed"), child("live", 4, "running")]);
