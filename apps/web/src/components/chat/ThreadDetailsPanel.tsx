@@ -24,6 +24,7 @@ import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadServersPanel } from "./ThreadServersPanel";
 import { ThreadExtensionStatusPanel } from "./ThreadExtensionStatusPanel";
+import { ThreadReviewPanel } from "./ThreadReviewPanel";
 import { ThreadTasksPanel } from "./ThreadTasksPanel";
 import { ThreadSubagentsPanel } from "./ThreadSubagentsPanel";
 import { ThreadDetailsUsage, type ThreadDetailsUsageInput } from "./ThreadDetailsUsage";
@@ -84,6 +85,7 @@ interface ThreadDetailsPanelProps extends Pick<
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
   usage: ThreadDetailsUsageInput;
   extensionStatuses?: ComponentProps<typeof ThreadExtensionStatusPanel>["statuses"];
+  review?: ComponentProps<typeof ThreadReviewPanel>["review"];
   taskSteps?: ComponentProps<typeof ThreadTasksPanel>["steps"];
   subagents?: ComponentProps<typeof ThreadSubagentsPanel>["subagents"];
 }
@@ -243,6 +245,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               {visible.tasks ? <ThreadTasksPanel steps={props.taskSteps} /> : null}
 
               {visible.subagents ? <ThreadSubagentsPanel subagents={props.subagents} /> : null}
+
+              {visible.review ? <ThreadReviewPanel review={props.review} /> : null}
 
               {visible.extensions ? (
                 <ThreadExtensionStatusPanel statuses={props.extensionStatuses} />

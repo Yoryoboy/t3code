@@ -558,6 +558,39 @@ describe("background work kinds from older or newer servers", () => {
     }
   });
 
+  it("round-trips a provider thread's review state through the stored JSON", () => {
+    const stored = {
+      id: "provider-thread-1",
+      driver: "pi",
+      providerInstanceId: "pi_gentle_shell",
+      providerSessionId: null,
+      appThreadId: "thread-1",
+      ownerNodeId: null,
+      nativeThreadRef: null,
+      nativeConversationHeadRef: null,
+      status: "idle",
+      firstRunOrdinal: 1,
+      lastRunOrdinal: 1,
+      handoffIds: [],
+      forkedFrom: null,
+      review: {
+        title: "rdd status",
+        status: "completed",
+        summary: "blocked · collect · reviewer_results_required",
+        updatedAt: "2026-10-29T22:00:00.000Z",
+      },
+      createdAt: "2026-04-20T00:00:00.000Z",
+      updatedAt: "2026-04-20T00:00:00.000Z",
+    };
+    const providerThread = decodeOrchestrationV2ProviderThreadJson(stored);
+    expect(providerThread.review?.title).toBe("rdd status");
+    expect(DateTime.formatIso(providerThread.review!.updatedAt)).toBe("2026-10-29T22:00:00.000Z");
+    expect(encodeOrchestrationV2ProviderThreadJson(providerThread)).toMatchObject({
+      review: stored.review,
+      updatedAt: stored.updatedAt,
+    });
+  });
+
   it("decodes a notification source kind from a newer server as generic background work", () => {
     const item = decodeOrchestrationV2TurnItemJson(
       storedNotification({ kind: "workflow", workflowId: "wf-1" }),
