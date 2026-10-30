@@ -24,6 +24,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   deriveCanInterruptRunningThread,
+  findLatestTodoPlan,
   deriveTimelineEntriesFromVisibleTurnItems,
   deriveTimelineEntriesFromVisibleTurnItemsWithState,
   deriveRevertTurnCountByUserMessageId,
@@ -906,6 +907,66 @@ describe("V2 session presentation", () => {
       expect(entries[1].entry.detail).toBeUndefined();
       expect(entries[1].entry.changedFiles).toEqual([fileItem.fileName]);
     }
+  });
+
+  it("finds the most recently updated todo list across runs", () => {
+    const projection = makeThreadProjectionFixture();
+    expect(findLatestTodoPlan(projection)).toBeNull();
+    const threadId = projection.thread.id;
+    const nodeId = NodeId.make("node-todo");
+    const plan = (id: string, runId: string, text: string) =>
+      ({
+        id: PlanId.make(id),
+        threadId,
+        runId: RunId.make(runId),
+        nodeId,
+        kind: "todo_list",
+        status: "active",
+        steps: [{ id: "1", text, status: "running" }],
+      }) as const;
+    const item = (planId: string, runId: string, at: string) =>
+      ({
+        id: TurnItemId.make(`item-${planId}`),
+        threadId,
+        runId: RunId.make(runId),
+        nodeId,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 0,
+        status: "completed",
+        title: null,
+        startedAt: DateTime.makeUnsafe(at),
+        completedAt: DateTime.makeUnsafe(at),
+        updatedAt: DateTime.makeUnsafe(at),
+        type: "todo_list",
+        planId: PlanId.make(planId),
+        steps: [],
+      }) satisfies OrchestrationV2TurnItem;
+    // The newer run's list wins even though it was stored first.
+    const latest = findLatestTodoPlan({
+      ...projection,
+      plans: [
+        plan("plan-new", "run-2", "Ship it"),
+        plan("plan-old", "run-1", "Explore"),
+        {
+          id: PlanId.make("plan-proposed"),
+          threadId,
+          runId: RunId.make("run-3"),
+          nodeId,
+          kind: "proposed_plan",
+          markdown: "Not a task list",
+          status: "active",
+        },
+      ],
+      turnItems: [
+        item("plan-old", "run-1", "2026-06-20T00:00:00.000Z"),
+        item("plan-new", "run-2", "2026-06-20T00:05:00.000Z"),
+      ],
+    });
+    expect(latest?.id).toBe(PlanId.make("plan-new"));
+    expect(latest?.steps.map((step) => step.text)).toEqual(["Ship it"]);
   });
 
   it("resolves attempt identity through V2 execution nodes", () => {
