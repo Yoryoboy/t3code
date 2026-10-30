@@ -1051,6 +1051,18 @@ export const OrchestrationV2ProviderExtensionStatus = Schema.Struct({
 export type OrchestrationV2ProviderExtensionStatus =
   typeof OrchestrationV2ProviderExtensionStatus.Type;
 
+/**
+ * Where a provider's review tools left the last review: Gentle Shell's `rdd` operations report
+ * one of these per call, so the details panel can show the position without reading tool text.
+ */
+export const OrchestrationV2ProviderReview = Schema.Struct({
+  title: TrimmedNonEmptyString,
+  status: Schema.Literals(["running", "completed", "failed"]),
+  summary: Schema.optional(TrimmedNonEmptyString),
+  updatedAt: Schema.DateTimeUtc,
+});
+export type OrchestrationV2ProviderReview = typeof OrchestrationV2ProviderReview.Type;
+
 export const OrchestrationV2ProviderThread = Schema.Struct({
   id: ProviderThreadId,
   driver: ProviderDriverKind,
@@ -1084,6 +1096,7 @@ export const OrchestrationV2ProviderThread = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   extensionStatuses: Schema.optional(Schema.Array(OrchestrationV2ProviderExtensionStatus)),
+  review: Schema.optional(OrchestrationV2ProviderReview),
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
 });
@@ -2330,6 +2343,12 @@ export const OrchestrationV2ProviderThreadJson = OrchestrationV2ProviderThread.m
     ...fields,
     createdAt: Schema.DateTimeUtcFromString,
     updatedAt: Schema.DateTimeUtcFromString,
+    review: Schema.optional(
+      OrchestrationV2ProviderReview.mapFields((reviewFields) => ({
+        ...reviewFields,
+        updatedAt: Schema.DateTimeUtcFromString,
+      })),
+    ),
   }),
 );
 export type OrchestrationV2ProviderThreadJson = typeof OrchestrationV2ProviderThreadJson.Type;
