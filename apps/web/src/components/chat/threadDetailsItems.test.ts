@@ -8,6 +8,7 @@ import {
 
 const usage = THREAD_DETAILS_ITEMS.find((item) => item.id === "usage")!;
 const servers = THREAD_DETAILS_ITEMS.find((item) => item.id === "servers")!;
+const review = THREAD_DETAILS_ITEMS.find((item) => item.id === "review")!;
 
 describe("thread details items", () => {
   it.each([
@@ -31,5 +32,14 @@ describe("thread details items", () => {
 
     const hidden = { threadDetailsItems: { servers: false }, threadDetailsUsageEnabled: false };
     expect(setThreadDetailsItem(hidden, servers, true)).toEqual({});
+  });
+
+  it("shows Review by default, directly above Extension status", () => {
+    const defaults = { threadDetailsItems: {}, threadDetailsUsageEnabled: false };
+    expect(resolveThreadDetailsVisibility(defaults).review).toBe(true);
+    expect(setThreadDetailsItem(defaults, review, false)).toEqual({ review: false });
+    expect(THREAD_DETAILS_ITEMS.indexOf(review)).toBe(
+      THREAD_DETAILS_ITEMS.findIndex((item) => item.id === "extensions") - 1,
+    );
   });
 });

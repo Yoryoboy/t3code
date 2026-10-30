@@ -13,6 +13,7 @@ export const THREAD_DETAILS_ITEMS = [
   { id: "lineage", label: "Lineage", defaultVisible: true },
   { id: "tasks", label: "Tasks", defaultVisible: true },
   { id: "subagents", label: "Subagents", defaultVisible: true },
+  { id: "review", label: "Review", defaultVisible: true },
   { id: "extensions", label: "Extension status", defaultVisible: true },
   { id: "usage", label: "Usage", defaultVisible: false },
 ] as const;

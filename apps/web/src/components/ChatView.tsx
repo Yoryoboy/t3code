@@ -3791,6 +3791,7 @@ export default function ChatView(props: ChatViewProps) {
                 contextWindow: activeContextWindow,
               }}
               extensionStatuses={activeProviderThread?.extensionStatuses}
+              review={activeProviderThread?.review}
               taskSteps={findLatestTodoPlan(serverProjection)?.steps}
               subagents={findPiSubagents(serverProjection)}
             />
