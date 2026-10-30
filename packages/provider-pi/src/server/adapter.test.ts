@@ -1783,7 +1783,8 @@ describe("PiAdapterV2", () => {
         item.type === "turn_item.updated" &&
           item.turnItem.type === "subagent" &&
           item.turnItem.subagentId === running.id &&
-          item.turnItem.status === "completed",
+          item.turnItem.status === "completed" &&
+          item.turnItem.agent === "worker",
       );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );

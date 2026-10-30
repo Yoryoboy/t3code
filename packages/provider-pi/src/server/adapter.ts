@@ -1218,6 +1218,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             driver: PI_PROVIDER,
             providerInstanceId: options.instanceId,
             childThreadId: null,
+            agent: task.agent,
             prompt: known.prompt,
             ...progress,
             result: resultText,
