@@ -25,6 +25,7 @@ import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadServersPanel } from "./ThreadServersPanel";
 import { ThreadExtensionStatusPanel } from "./ThreadExtensionStatusPanel";
 import { ThreadTasksPanel } from "./ThreadTasksPanel";
+import { ThreadSubagentsPanel } from "./ThreadSubagentsPanel";
 import { ThreadDetailsUsage, type ThreadDetailsUsageInput } from "./ThreadDetailsUsage";
 import { ThreadDetailsItemsMenuItems } from "./ThreadDetailsItemsMenu";
 import { resolveThreadDetailsVisibility, THREAD_DETAILS_ITEMS } from "./threadDetailsItems";
@@ -84,6 +85,7 @@ interface ThreadDetailsPanelProps extends Pick<
   usage: ThreadDetailsUsageInput;
   extensionStatuses?: ComponentProps<typeof ThreadExtensionStatusPanel>["statuses"];
   taskSteps?: ComponentProps<typeof ThreadTasksPanel>["steps"];
+  subagents?: ComponentProps<typeof ThreadSubagentsPanel>["subagents"];
 }
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
@@ -239,6 +241,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               ) : null}
 
               {visible.tasks ? <ThreadTasksPanel steps={props.taskSteps} /> : null}
+
+              {visible.subagents ? <ThreadSubagentsPanel subagents={props.subagents} /> : null}
 
               {visible.extensions ? (
                 <ThreadExtensionStatusPanel statuses={props.extensionStatuses} />

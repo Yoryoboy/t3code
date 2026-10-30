@@ -1354,8 +1354,19 @@ function settleSupersededReasoning(entries: ReadonlyArray<TimelineEntry>) {
   });
 }
 
+// Pi subagents are Gentle Agents tasks, listed in the details panel's Subagents section instead.
+function isPiSubagentEntry(entry: TimelineEntry) {
+  return (
+    entry.kind === "event" &&
+    entry.projectedItem.item.type === "subagent" &&
+    entry.projectedItem.item.driver === "pi"
+  );
+}
+
 function timelineRowEntries(entries: ReadonlyArray<TimelineEntry>) {
-  return withoutSubagentDelegationRows(settleSupersededReasoning(entries));
+  return withoutSubagentDelegationRows(
+    settleSupersededReasoning(entries.filter((entry) => !isPiSubagentEntry(entry))),
+  );
 }
 
 function deriveTimelineTurnFolds(

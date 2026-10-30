@@ -287,6 +287,15 @@ export function findLatestTodoPlan(
   return latest?.plan.kind === "todo_list" ? latest.plan : null;
 }
 
+/** Pi's Gentle Agents tasks, which the details panel lists instead of the timeline. */
+export function findPiSubagents(projection: ThreadStructure | null) {
+  if (projection === null) return [];
+  return projection.turnItems.filter(
+    (item): item is Extract<typeof item, { readonly type: "subagent" }> =>
+      item.type === "subagent" && item.driver === "pi",
+  );
+}
+
 export function findLatestProposedPlan(
   projection: ThreadStructure | null,
   latestRunId: RunId | string | null | undefined,

@@ -135,6 +135,7 @@ import {
   deriveCanInterruptRunningThread,
   findLatestProposedPlan,
   findLatestTodoPlan,
+  findPiSubagents,
   findRevertCheckpoint,
   hasActionableProposedPlan,
   isLatestRunSettled,
@@ -3791,6 +3792,7 @@ export default function ChatView(props: ChatViewProps) {
               }}
               extensionStatuses={activeProviderThread?.extensionStatuses}
               taskSteps={findLatestTodoPlan(serverProjection)?.steps}
+              subagents={findPiSubagents(serverProjection)}
             />
 
             <PullRequestThreadDialogHost
