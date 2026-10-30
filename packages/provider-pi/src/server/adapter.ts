@@ -73,6 +73,7 @@ import {
 } from "./mcpInjection.ts";
 import { PI_FILE_CHANGE_TOOLS } from "./mcpExtensionSource.ts";
 import { applyPiExtensionStatus } from "./extensionStatus.ts";
+import { piReviewState, piReviewToolTitle } from "./reviewState.ts";
 import { piTodoSteps } from "./todoSnapshot.ts";
 import {
   GENTLE_AGENTS_RESULT_TYPE,
@@ -1120,7 +1121,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           driver: PI_PROVIDER,
           turnItem: {
             ...shared,
-            title: toolName,
+            title: piReviewToolTitle(toolName, args) ?? toolName,
             type: "dynamic_tool",
             ...mcpToolPresentation({ toolName }),
             toolName,
@@ -1143,6 +1144,24 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             outputText,
           );
         }
+      });
+
+      const emitReviewState = Effect.fnUntraced(function* (
+        state: PiThreadState,
+        event: PiRpcRecord,
+        phase: "start" | "end",
+      ) {
+        const toolCallId = recordString(event, "toolCallId");
+        if (toolCallId === undefined) return;
+        const next = piReviewState(state.providerThread.review, {
+          toolName: recordString(event, "toolName") ?? "tool",
+          args: event["args"] ?? state.activeTurn?.toolArgs.get(toolCallId),
+          details:
+            phase === "end" ? recordField(recordField(event, "result"), "details") : undefined,
+          failed: phase === "end" && event["isError"] === true,
+          at: yield* DateTime.now,
+        });
+        if (next !== undefined) yield* updateProviderThread(state, { review: next });
       });
 
       const emitGentleAgentsTask = Effect.fnUntraced(function* (
@@ -1923,12 +1942,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               turn.sawAgentActivity = true;
               yield* emitToolItem(turn, event, "start");
             }
+            if (state !== null) yield* emitReviewState(state, event, "start");
             return;
           case "tool_execution_update":
             if (turn !== null) yield* emitToolItem(turn, event, "update");
             return;
           case "tool_execution_end":
             if (turn !== null) yield* emitToolItem(turn, event, "end");
+            if (state !== null) yield* emitReviewState(state, event, "end");
             return;
           case "compaction_start": {
             if (turn === null) return;
@@ -3434,6 +3455,48 @@ function piThreadSnapshot(
   return { providerThread, providerTurns: [], messages: [], runtimeRequests: [] };
 }
 
+/** A question header is a one-line summary; the full text stays in the question. */
+const MAX_QUESTION_HEADER_LENGTH = 60;
+
+function piQuestionHeader(title: string): string {
+  if (!title.includes("\n")) return title;
+  const firstLine = title
+    .split(/\r?\n/u)
+    .find((line) => line.trim().length > 0)
+    ?.trim();
+  if (firstLine === undefined) return title;
+  return firstLine.length <= MAX_QUESTION_HEADER_LENGTH
+    ? firstLine
+    : `${firstLine.slice(0, MAX_QUESTION_HEADER_LENGTH - 1).trimEnd()}…`;
+}
+
+/**
+ * A select option can carry several lines, such as an action followed by its effect.
+ * The first line becomes the label and the rest the description; `value` stays the
+ * exact option so the answered value round-trips unchanged.
+ */
+function piSelectOption(option: string): {
+  label: string;
+  description: string;
+  value: string;
+} {
+  const lines = option.split(/\r?\n/u);
+  if (lines.length === 1) {
+    const text = option.length === 0 ? "Empty value" : option;
+    return { label: text, description: text, value: option };
+  }
+  const labelIndex = lines.findIndex((line) => line.trim().length > 0);
+  if (labelIndex === -1) return { label: "Empty value", description: "Empty value", value: option };
+  const label = lines[labelIndex]!.trim();
+  const description =
+    lines
+      .slice(labelIndex + 1)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .join(" ") || label;
+  return { label, description, value: option };
+}
+
 function piQuestion(
   questionId: string,
   method: "select" | "input" | "editor",
@@ -3444,11 +3507,7 @@ function piQuestion(
     method === "select" && Array.isArray(event["options"])
       ? event["options"]
           .filter((option): option is string => typeof option === "string")
-          .map((option) => ({
-            label: option || "Empty value",
-            description: option || "Empty value",
-            value: option,
-          }))
+          .map(piSelectOption)
       : method === "editor"
         ? []
         : [
@@ -3465,7 +3524,7 @@ function piQuestion(
     ) ?? title;
   return {
     id: questionId,
-    header: title,
+    header: piQuestionHeader(title),
     question,
     ...(method === "editor" ? { initialAnswer: recordString(event, "prefill") ?? "" } : {}),
     options,

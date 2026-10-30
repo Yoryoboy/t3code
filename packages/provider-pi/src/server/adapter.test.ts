@@ -15,6 +15,7 @@ import {
   type ChatAttachment,
   type ModelSelection,
   type OrchestrationV2AppThread,
+  type OrchestrationV2ProviderReview,
   type OrchestrationV2ProviderThread,
   OrchestrationV2UserInputQuestion,
   type OrchestrationV2ProviderTurn,
@@ -1698,6 +1699,87 @@ describe("PiAdapterV2", () => {
       assert.isTrue(
         fallback.type === "turn_item.updated" && fallback.turnItem.type === "dynamic_tool",
       );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("publishes review state and an rdd title for review tool calls", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      const takeReview = () =>
+        takeEvent(
+          (event) =>
+            event.type === "provider_thread.updated" && event.providerThread.review !== undefined,
+        ).pipe(
+          Effect.map((event) =>
+            event.type === "provider_thread.updated" ? event.providerThread.review : undefined,
+          ),
+        );
+      const reviewShape = (review: OrchestrationV2ProviderReview | undefined) =>
+        review === undefined
+          ? null
+          : { title: review.title, status: review.status, summary: review.summary };
+
+      // A tool outside the review lifecycle publishes no review state, so the next one is the start.
+      yield* fake.emit({
+        type: "tool_execution_start",
+        toolCallId: "bash-1",
+        toolName: "bash",
+        args: { command: "ls" },
+      });
+      yield* fake.emit({
+        type: "tool_execution_start",
+        toolCallId: "review-1",
+        toolName: "gentle_review",
+        args: { operation: "status" },
+      });
+      const startItem = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "dynamic_tool" &&
+          event.turnItem.toolName === "gentle_review",
+      );
+      if (startItem.type !== "turn_item.updated" || startItem.turnItem.type !== "dynamic_tool")
+        return yield* Effect.die("Expected a dynamic tool item");
+      assert.equal(startItem.turnItem.title, "rdd status");
+      assert.deepStrictEqual(startItem.turnItem.input, { operation: "status" });
+
+      const running = yield* takeReview();
+      assert.deepStrictEqual(reviewShape(running), {
+        title: "rdd status",
+        status: "running",
+        summary: undefined,
+      });
+      assert.isTrue(running !== undefined && DateTime.isDateTime(running.updatedAt));
+
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "review-1",
+        toolName: "gentle_review",
+        result: {
+          content: [{ type: "text", text: "review blocked" }],
+          details: {
+            status: "blocked",
+            action: "collect",
+            next_transition: { reason_code: "reviewer_results_required" },
+          },
+        },
+      });
+      const completed = yield* takeReview();
+      assert.deepStrictEqual(reviewShape(completed), {
+        title: "rdd status",
+        status: "completed",
+        summary: "blocked · collect · reviewer_results_required",
+      });
+      assert.isTrue(completed !== undefined && DateTime.isDateTime(completed.updatedAt));
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
@@ -3466,7 +3548,7 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
-  it.effect("emits a valid empty select option and returns its original value", () =>
+  it.effect("emits a valid empty select option and splits a multi-line option's label", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
       const { runtime, takeEvent } = yield* openRuntime(fake);
@@ -3504,6 +3586,75 @@ describe("PiAdapterV2", () => {
       const response = yield* fake.takeRequest("extension_ui_response");
       assert.equal(response["value"], "");
       assert.isUndefined(response["cancelled"]);
+
+      const takeSelect = (questionId: string) =>
+        takeEvent(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "user_input_request" &&
+            event.turnItem.questions[0]?.id === questionId,
+        );
+      const multiLineOption =
+        "1. Review this candidate now\nEffect: Reviews this change once and reports findings.";
+      const multiLineTitle = "Review consent\nThree actions are available.";
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-select-multiline",
+        method: "select",
+        title: multiLineTitle,
+        options: [multiLineOption, "stable"],
+      });
+      const multiLineEvent = yield* takeSelect("ui-select-multiline");
+      if (
+        multiLineEvent.type !== "turn_item.updated" ||
+        multiLineEvent.turnItem.type !== "user_input_request"
+      ) {
+        return assert.fail("expected a user input request");
+      }
+      const multiLineQuestion = decodeUserInputQuestions(multiLineEvent.turnItem.questions)[0];
+      assert.deepEqual(
+        multiLineQuestion?.options.map((option) => [
+          option.label,
+          option.description,
+          option.value,
+        ]),
+        [
+          [
+            "1. Review this candidate now",
+            "Effect: Reviews this change once and reports findings.",
+            multiLineOption,
+          ],
+          ["stable", "stable", "stable"],
+        ],
+      );
+      assert.equal(multiLineQuestion?.header, "Review consent");
+      assert.equal(multiLineQuestion?.question, multiLineTitle);
+      yield* runtime.respondToRuntimeRequest({
+        requestId: multiLineEvent.turnItem.requestId,
+        answers: { "ui-select-multiline": multiLineOption },
+      });
+      const multiLineResponse = yield* fake.takeRequest("extension_ui_response");
+      assert.equal(multiLineResponse["value"], multiLineOption);
+
+      const longFirstLine = "Review this candidate before the next transition and then record it";
+      const longTitle = `${longFirstLine}\nSecond line.`;
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-select-long-title",
+        method: "select",
+        title: longTitle,
+        options: ["stable"],
+      });
+      const longTitleEvent = yield* takeSelect("ui-select-long-title");
+      if (
+        longTitleEvent.type !== "turn_item.updated" ||
+        longTitleEvent.turnItem.type !== "user_input_request"
+      ) {
+        return assert.fail("expected a user input request");
+      }
+      const longTitleQuestion = decodeUserInputQuestions(longTitleEvent.turnItem.questions)[0];
+      assert.equal(longTitleQuestion?.header, `${longFirstLine.slice(0, 59).trimEnd()}…`);
+      assert.equal(longTitleQuestion?.question, longTitle);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
