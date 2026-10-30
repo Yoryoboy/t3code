@@ -1593,8 +1593,10 @@ describe("PiAdapterV2", () => {
         { key: "yolo", text: "💥 SUPER YOLO ON" },
       ]);
 
-      // A repeated value publishes nothing, so the next update is the new key.
+      // Repeated values and oversized keys publish nothing, so the next update is the new key.
       yield* setStatus("yolo", "💥 SUPER YOLO ON");
+      yield* setStatus(`${"k".repeat(64)}-a`, "first");
+      yield* setStatus(`${"k".repeat(64)}-b`, "second");
       yield* setStatus("engram", "t3code · ready");
       assert.deepStrictEqual(yield* nextStatuses(() => true), [
         { key: "yolo", text: "💥 SUPER YOLO ON" },
